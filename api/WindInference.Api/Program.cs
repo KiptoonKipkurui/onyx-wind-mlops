@@ -1,5 +1,7 @@
 using System.Reflection;
+using Microsoft.AspNetCore.Authentication;
 using Microsoft.OpenApi.Models;
+using WindInference.Api.Security;
 using WindInference.Api.Services;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -9,6 +11,12 @@ builder.Logging.AddConsole();
 builder.Logging.AddDebug();
 
 builder.Services.AddControllers();
+builder.Services
+    .AddAuthentication(ApiKeyAuthenticationDefaults.SchemeName)
+    .AddScheme<AuthenticationSchemeOptions, ApiKeyAuthenticationHandler>(
+        ApiKeyAuthenticationDefaults.SchemeName,
+        options => { });
+builder.Services.AddAuthorization();
 builder.Services.AddEndpointsApiExplorer();
 builder.Services.AddSwaggerGen(options =>
 {
@@ -19,6 +27,30 @@ builder.Services.AddSwaggerGen(options =>
             Title = "Wind Inference API",
             Version = "v1",
             Description = "ONNX Runtime API for multiclass wind turbine event inference from SCADA features."
+        });
+    options.AddSecurityDefinition(
+        ApiKeyAuthenticationDefaults.SchemeName,
+        new OpenApiSecurityScheme
+        {
+            Description = $"API key required in the {ApiKeyAuthenticationDefaults.HeaderName} header.",
+            In = ParameterLocation.Header,
+            Name = ApiKeyAuthenticationDefaults.HeaderName,
+            Type = SecuritySchemeType.ApiKey,
+            Scheme = ApiKeyAuthenticationDefaults.SchemeName
+        });
+    options.AddSecurityRequirement(
+        new OpenApiSecurityRequirement
+        {
+            [
+                new OpenApiSecurityScheme
+                {
+                    Reference = new OpenApiReference
+                    {
+                        Type = ReferenceType.SecurityScheme,
+                        Id = ApiKeyAuthenticationDefaults.SchemeName
+                    }
+                }
+            ] = Array.Empty<string>()
         });
 
     var xmlFile = $"{Assembly.GetExecutingAssembly().GetName().Name}.xml";
@@ -45,6 +77,8 @@ app.UseReDoc(options =>
     options.DocumentTitle = "Wind Inference API Docs";
 });
 
+app.UseAuthentication();
+app.UseAuthorization();
 app.MapControllers();
 
 app.Run();
