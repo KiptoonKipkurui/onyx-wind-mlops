@@ -1,3 +1,4 @@
+using Microsoft.AspNetCore.Authorization;
 using Microsoft.AspNetCore.Mvc;
 using WindInference.Api.Models;
 using WindInference.Api.Services;
@@ -5,6 +6,7 @@ using WindInference.Api.Services;
 namespace WindInference.Api.Controllers;
 
 [ApiController]
+[Authorize]
 [Route("api/inference")]
 public sealed class InferenceController : ControllerBase
 {
@@ -44,7 +46,6 @@ public sealed class InferenceController : ControllerBase
     /// <param name="request">The turbine feature payload.</param>
     /// <returns>A prediction with class probabilities and echoed feature values.</returns>
     [HttpPost("predict")]
-    [HttpPost("/predict")]
     [ProducesResponseType(typeof(PredictionResponse), StatusCodes.Status200OK)]
     [ProducesResponseType(StatusCodes.Status400BadRequest)]
     public IActionResult Predict([FromBody] PredictionRequest request)
