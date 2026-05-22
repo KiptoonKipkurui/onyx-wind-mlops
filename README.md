@@ -1,4 +1,4 @@
-# Wind Turbine ONNX ML Take-Home
+# Wind Turbine ONYX ML
 
 The project undertakes the following:
 
