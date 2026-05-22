@@ -1,6 +1,6 @@
 # Wind Turbine ONNX ML Take-Home
 
-This is a production-shaped take-home for the ML Engineer exercise:
+The project undertakes the following:
 
 - train a Python model on Penmanshiel-style wind-farm SCADA data,
 - track experiments and artifacts in MLflow,
@@ -8,7 +8,7 @@ This is a production-shaped take-home for the ML Engineer exercise:
 - publish a versioned bundle to a local model repository,
 - serve the ONNX model from a .NET 10 controller-based Web API with ONNX Runtime.
 
-The assignment is intentionally open-ended, so the default target is now a multiclass `next_event_type_60m` classifier. It predicts the highest-priority turbine event/status type expected in the next hour from current SCADA signals, while avoiding obvious leakage fields such as availability and lost-production columns.
+The default target is a multiclass `next_event_type_60m` classifier. It predicts the highest-priority turbine event/status type expected in the next hour from current SCADA signals, while avoiding obvious leakage fields such as availability and lost-production columns.
 
 ## Project Layout
 
@@ -24,26 +24,25 @@ model_repository/               Versioned ONNX bundles for serving
 
 ## Data
 
-Use the public Penmanshiel Wind Farm Data referenced in the interview brief. Put a SCADA CSV under:
-
+Place the extracted folder containing `Turbine_Data_*.csv` and matching `Status_*.csv` files under `data/raw`, or pass the folder directly with `--data-dir`.
 ```bash
 wind-onnx-mlops-takehome/data/raw/
 ```
-
-For the reusable Python pipeline, place the extracted folder containing `Turbine_Data_*.csv` and matching `Status_*.csv` files under `data/raw`, or pass the folder directly with `--data-dir`.
-
 The training code resolves common wind-farm column names such as wind speed, active power, rotor speed, generator speed, pitch angle, nacelle/yaw, and temperature.
 
 ## Run The Python Pipeline
 
+You can manually run the pipeline as
 ```bash
-cd wind-onnx-mlops-takehome
+cd onnx-wind-mlops
 python -m venv .venv
 source .venv/bin/activate
 python -m pip install -e .
 python -m wind_mlops.train --data-dir "$HOME/Downloads/Penmanshiel_SCADA_2016_WT01-10_3107"
 python -m wind_mlops.export_onnx
 ```
+
+or use `airflow` to orchestrate the pipeline
 
 The exported bundle is written to:
 
@@ -52,9 +51,6 @@ model_repository/penmanshiel-event-type-onnx/<run-id-prefix>-<export-timestamp>/
   model.onnx
   metadata.json
 ```
-
-MLflow also receives a `data_profile.json` artifact containing source CSV SHA-256 hashes, row counts, selected features, and target class balance. That gives you a lightweight data-versioning story without adding another service to the timeboxed exercise.
-Each ONNX export creates a new version directory, so re-exporting from the same trained model does not overwrite earlier bundles.
 
 Run an ONNX smoke test:
 
@@ -77,19 +73,15 @@ The DAG in `airflow/dags/wind_model_pipeline.py` wraps the same three production
 2. `python -m wind_mlops.export_onnx`
 3. `python -m wind_mlops.smoke_test_onnx <latest bundle>`
 
-For a short take-home, MLflow is the important MLOps layer and Airflow is kept deliberately thin. In a real deployment, this DAG would run after a validated data snapshot lands and would publish the ONNX bundle to a central registry or object store.
 
 ## Run The .NET 10 API
 
-The API targets `net10.0` and uses ASP.NET Core controllers. The root routes are kept for quick testing, and conventional controller routes are available too:
+The API targets `net10.0` and uses ASP.NET Core controllers. 
 
 ```text
 GET  /health
 GET  /docs
-GET  /openapi/v1.json
-GET  /metadata
 GET  /api/inference/metadata
-POST /predict
 POST /api/inference/predict
 ```
 
@@ -187,11 +179,4 @@ python -m pytest tests/python
 dotnet test api/WindInference.Api/WindInference.Api.sln
 ```
 
-## Interview Talking Points
 
-- ONNX separates training framework choice from serving runtime, so the .NET service does not need sklearn.
-- MLflow records parameters, metrics, reports, and the sklearn/ONNX artifacts for reproducibility.
-- Data versioning is represented by the logged source-file hash and data profile artifact; in a larger system this would become a DVC/lakeFS/table-version integration.
-- The model repository is versioned by MLflow run id prefix and contains both `model.onnx` and `metadata.json`, which is the serving contract.
-- The API supports reusable inference patterns: metadata-driven feature ordering, model version decoupling through `MODEL_BUNDLE_PATH`, and structured prediction responses.
-- The target is multiclass and forward-looking; the production value is in the end-to-end path and the ability to swap the model or event taxonomy later.
