@@ -109,9 +109,11 @@ That path is relative to `api/WindInference.Api`. You can also set:
 
 ```bash
 export MODEL_BUNDLE_PATH="$PWD/../../model_repository/penmanshiel-event-type-onnx/<version>"
+export API_KEY="dev-api-key"
 ```
 
 The API uses an `IModelProvider` abstraction. The current implementation is `FileSystemModelProvider`, which resolves the bundle from disk. A future MLflow, S3, Azure Blob, or registry-backed provider can implement the same interface without changing the ONNX inference service.
+Inference endpoints require an API key in the `X-API-Key` header. Health, OpenAPI, and Redoc stay public for operational visibility.
 
 ## Run The API In Docker
 
@@ -126,6 +128,7 @@ Run it with the model bundle mounted read-only into `/models`:
 ```bash
 docker run --rm -p 5000:8080 \
   -e MODEL_BUNDLE_PATH=/models \
+  -e API_KEY=dev-api-key \
   -v "$PWD/model_repository/penmanshiel-event-type-onnx/7aa9f28371f1-20260521T171138Z:/models:ro" \
   wind-inference-api
 ```
@@ -136,6 +139,7 @@ Example request with ordered features:
 
 ```bash
 curl -s http://localhost:5000/api/inference/predict \
+  -H "X-API-Key: dev-api-key" \
   -H "Content-Type: application/json" \
   -d '{
   "turbineId": "T01",
@@ -147,6 +151,7 @@ Example request with named features:
 
 ```bash
 curl -s http://localhost:5000/api/inference/predict \
+  -H "X-API-Key: dev-api-key" \
   -H "Content-Type: application/json" \
   -d '{
   "turbineId": "T01",
@@ -161,7 +166,8 @@ curl -s http://localhost:5000/api/inference/predict \
 The model metadata endpoint shows the exact feature names expected by the trained artifact:
 
 ```bash
-curl -s http://localhost:5000/api/inference/metadata
+curl -s http://localhost:5000/api/inference/metadata \
+  -H "X-API-Key: dev-api-key"
 ```
 
 ## Run Tests
@@ -178,5 +184,4 @@ python -m pytest tests/python
 ```bash
 dotnet test api/WindInference.Api/WindInference.Api.sln
 ```
-
 
