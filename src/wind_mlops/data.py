@@ -179,7 +179,8 @@ def build_multiclass_training_frame(
     for class_name, flag in EVENT_PRIORITY:
         shifted_flags = []
         for step in range(1, future_steps + 1):
-            shifted = model_data.groupby("turbine")[flag].shift(-step).fillna(False).astype(bool)
+            shifted = model_data.groupby("turbine")[flag].shift(-step)
+            shifted = shifted.where(shifted.notna(), False).astype(bool)
             shifted_flags.append(shifted.to_numpy())
         future_event_masks[class_name] = np.column_stack(shifted_flags).any(axis=1)
 
