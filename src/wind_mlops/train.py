@@ -26,7 +26,6 @@ def candidate_classifiers(random_state: int) -> dict[str, ClassifierMixin]:
         "multinomial_logistic_regression": LogisticRegression(
             class_weight="balanced",
             max_iter=1000,
-            multi_class="multinomial",
             random_state=random_state,
         ),
         "random_forest": RandomForestClassifier(
