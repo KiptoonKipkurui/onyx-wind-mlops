@@ -52,6 +52,8 @@ model_repository/penmanshiel-event-type-onnx/<run-id-prefix>-<export-timestamp>/
   metadata.json
 ```
 
+Training compares multinomial logistic regression, random forest, and gradient boosting candidates, then saves the best model by balanced accuracy. The comparison table is written to `artifacts/model_comparison.json` and logged to MLflow.
+
 Run an ONNX smoke test:
 
 ```bash
@@ -184,4 +186,3 @@ python -m pytest tests/python
 ```bash
 dotnet test api/WindInference.Api/WindInference.Api.sln
 ```
-
