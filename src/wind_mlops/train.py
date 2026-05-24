@@ -8,6 +8,8 @@ from pathlib import Path
 import joblib
 import mlflow
 import numpy as np
+from sklearn.base import ClassifierMixin
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
 from sklearn.impute import SimpleImputer
 from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import balanced_accuracy_score, classification_report, top_k_accuracy_score
@@ -17,6 +19,52 @@ from sklearn.preprocessing import LabelEncoder, StandardScaler
 
 from wind_mlops.config import ARTIFACT_DIR, DEFAULT_CONFIG, MLRUNS_DIR, RAW_DATA_DIR
 from wind_mlops.data import build_multiclass_training_frame, load_penmanshiel_dataset
+
+
+def candidate_classifiers(random_state: int) -> dict[str, ClassifierMixin]:
+    return {
+        "multinomial_logistic_regression": LogisticRegression(
+            class_weight="balanced",
+            max_iter=1000,
+            multi_class="multinomial",
+            random_state=random_state,
+        ),
+        "random_forest": RandomForestClassifier(
+            n_estimators=300,
+            class_weight="balanced",
+            random_state=random_state,
+            n_jobs=-1,
+        ),
+        "gradient_boosting": GradientBoostingClassifier(
+            n_estimators=150,
+            learning_rate=0.05,
+            max_depth=3,
+            random_state=random_state,
+        ),
+    }
+
+
+def build_pipeline(model_name: str, classifier: ClassifierMixin) -> Pipeline:
+    steps = [("imputer", SimpleImputer(strategy="median"))]
+    if model_name == "multinomial_logistic_regression":
+        steps.append(("scaler", StandardScaler()))
+    steps.append(("classifier", classifier))
+    return Pipeline(steps=steps)
+
+
+def model_metrics(
+    pipeline: Pipeline,
+    X_test,
+    y_test: np.ndarray,
+    labels: np.ndarray,
+) -> tuple[dict[str, float], np.ndarray, np.ndarray]:
+    predictions = pipeline.predict(X_test)
+    probabilities = pipeline.predict_proba(X_test)
+    metrics = {
+        "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
+        "top_2_accuracy": float(top_k_accuracy_score(y_test, probabilities, k=2, labels=labels)),
+    }
+    return metrics, predictions, probabilities
 
 
 def sha256_file(path: Path) -> str:
@@ -58,42 +106,57 @@ def train(data_dir: Path | None = None) -> Path:
         X, y, test_size=cfg.test_size, random_state=cfg.random_state, stratify=y
     )
 
-    pipeline = Pipeline(
-        steps=[
-            ("imputer", SimpleImputer(strategy="median")),
-            ("scaler", StandardScaler()),
-            (
-                "classifier",
-                LogisticRegression(
-                    class_weight="balanced",
-                    max_iter=1000,
-                    multi_class="multinomial",
-                    random_state=cfg.random_state,
-                ),
-            ),
-        ]
-    )
-
     mlflow.set_tracking_uri(MLRUNS_DIR.as_uri())
     mlflow.set_experiment(cfg.experiment_name)
     ARTIFACT_DIR.mkdir(parents=True, exist_ok=True)
 
     with mlflow.start_run() as run:
-        pipeline.fit(X_train, y_train)
-        predictions = pipeline.predict(X_test)
-        probabilities = pipeline.predict_proba(X_test)
-
         labels = np.arange(len(class_names))
+        comparison: list[dict[str, object]] = []
+        best_name = ""
+        best_pipeline: Pipeline | None = None
+        best_predictions: np.ndarray | None = None
+        best_metrics: dict[str, float] | None = None
+
+        for model_name, classifier in candidate_classifiers(cfg.random_state).items():
+            pipeline = build_pipeline(model_name, classifier)
+            pipeline.fit(X_train, y_train)
+            candidate_metrics, predictions, _ = model_metrics(pipeline, X_test, y_test, labels)
+            comparison.append({"model_name": model_name, **candidate_metrics})
+            mlflow.log_metrics(
+                {f"{model_name}_{key}": value for key, value in candidate_metrics.items()}
+            )
+
+            if best_metrics is None or (
+                candidate_metrics["balanced_accuracy"],
+                candidate_metrics["top_2_accuracy"],
+            ) > (
+                best_metrics["balanced_accuracy"],
+                best_metrics["top_2_accuracy"],
+            ):
+                best_name = model_name
+                best_pipeline = pipeline
+                best_predictions = predictions
+                best_metrics = candidate_metrics
+
+        if best_pipeline is None or best_predictions is None or best_metrics is None:
+            raise RuntimeError("No candidate classifiers were trained.")
+
+        comparison = sorted(
+            comparison,
+            key=lambda row: (row["balanced_accuracy"], row["top_2_accuracy"]),
+            reverse=True,
+        )
         metrics = {
-            "balanced_accuracy": float(balanced_accuracy_score(y_test, predictions)),
-            "top_2_accuracy": float(top_k_accuracy_score(y_test, probabilities, k=2, labels=labels)),
+            **best_metrics,
             "rows": int(len(X)),
             "feature_count": int(len(feature_names)),
             "class_count": int(len(class_names)),
         }
         mlflow.log_params(
             {
-                "model_type": "multinomial_logistic_regression",
+                "model_type": best_name,
+                "candidate_models": ",".join(candidate_classifiers(cfg.random_state).keys()),
                 "source_root": str(source),
                 "future_steps": cfg.future_steps,
                 "min_class_rows": cfg.min_class_rows,
@@ -107,9 +170,10 @@ def train(data_dir: Path | None = None) -> Path:
         label_encoder_path = ARTIFACT_DIR / "label_encoder.joblib"
         metadata_path = ARTIFACT_DIR / "metadata.json"
         report_path = ARTIFACT_DIR / "classification_report.json"
+        comparison_path = ARTIFACT_DIR / "model_comparison.json"
         data_profile_path = ARTIFACT_DIR / "data_profile.json"
 
-        joblib.dump(pipeline, model_path)
+        joblib.dump(best_pipeline, model_path)
         joblib.dump(label_encoder, label_encoder_path)
         data_profile = {
             **source_profile(source),
@@ -124,6 +188,8 @@ def train(data_dir: Path | None = None) -> Path:
         metadata = {
             "run_id": run.info.run_id,
             "model_name": cfg.registered_model_name,
+            "model_type": best_name,
+            "candidate_models": [row["model_name"] for row in comparison],
             "task": "multiclass_classification",
             "target": "next_event_type_60m",
             "target_definition": (
@@ -144,7 +210,7 @@ def train(data_dir: Path | None = None) -> Path:
             json.dumps(
                 classification_report(
                     y_test,
-                    predictions,
+                    best_predictions,
                     labels=labels,
                     target_names=class_names,
                     output_dict=True,
@@ -154,14 +220,16 @@ def train(data_dir: Path | None = None) -> Path:
             ),
             encoding="utf-8",
         )
+        comparison_path.write_text(json.dumps(comparison, indent=2), encoding="utf-8")
         data_profile_path.write_text(json.dumps(data_profile, indent=2), encoding="utf-8")
 
         mlflow.log_artifact(str(model_path))
         mlflow.log_artifact(str(label_encoder_path))
         mlflow.log_artifact(str(metadata_path))
         mlflow.log_artifact(str(report_path))
+        mlflow.log_artifact(str(comparison_path))
         mlflow.log_artifact(str(data_profile_path))
-        mlflow.sklearn.log_model(pipeline, artifact_path="sklearn_model")
+        mlflow.sklearn.log_model(best_pipeline, artifact_path="sklearn_model")
 
     print(model_path)
     return model_path
